@@ -1,0 +1,264 @@
+--CREATE OR REPLACE VIEW dataanalytics.bi.wwe2k22_item_metrics as
+WITH item_detail as (
+// This should also be used to calculate purchases
+select
+date_trunc('DAY', collect_inserted_timestamp) date, 
+case 
+ when platform = 'PC_CLIENT' then 'Windows'
+ when platform = 'PS5' then 'PS5'
+ when platform = 'XSX' then 'XBSX'
+ when platform = 'XBOXONE' then 'XB1'
+ when platform = 'PS4' then 'PS4'
+ else 'New' || platform end platform,
+user_country,
+currency_type,
+item_value item_id,
+item_type,
+Currency_amount::integer Currency_amount,
+NAME_LOC_TEXT,
+iff(QTY is null and item_type = 'Pack', 1, QTY)::integer as pack_quantity, // if box then what size? otherwise put 1 in
+iff(item_type = 'Card',NAME_LOC_TEXT,null) card_rarity, // for tokens
+case
+ when pack_quantity >1 and item_type = 'Pack' then regexp_replace(NAME_LOC_TEXT, concat(' ',pack_quantity,'.*',''))
+ when NAME_LOC_TEXT like '%PACK%' and item_type = 'Pack' then regexp_replace(NAME_LOC_TEXT,' PACK','')
+ when NAME_LOC_TEXT like '%Token%' and item_type = 'Card' then null
+end as series, // name of pack series, lets us associate single and boxes of packs 
+case 
+ when currency_type = 'Tokens' then NOTES
+end as token_name,
+orv as ovr,
+mfc.card_id cardid,
+count(distinct user_id) dau_market_purchase,
+count(distinct transaction_guid) market_purchase
+  
+from WWE2K22.EVENTS.GENERAL_TRANSACTION gt
+left join WWE2K22.REFERENCE.OFFER_TABLE r on r.ID = gt.item_value
+left join (select * from WWE2K22.REFERENCE.BUNDLE_TABLE where size >0) b on r.pack_id = b.ID
+left join (select distinct CARD_ID, orv,RARITY,NAME_LOC_TEXT card_name from "WWE2K22"."REFERENCE"."MF_CARDS" Card) mfc
+ on TRY_CAST(r.card_id as INTEGER) = TRY_CAST(mfc.CARD_ID as INTEGER)
+where currency_action = 'Spend'
+and game_mode = 'MyFaction'
+and currency_type in ('MFP','VC', 'Tokens')
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07' // get rid of some of the dev data -- 2022-03-07
+and date_trunc('DAY', collect_inserted_timestamp) < CURRENT_DATE()
+group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14
+),
+  
+mf_store as (
+Select
+to_date(collect_inserted_timestamp) date,
+user_country country_code,
+ifnull(country.name, 'Unknown') AS country,
+ifnull(country.territory_name, 'Unknown') AS territory,
+ifnull(country.region_name, 'Unknown') AS region,
+store.item_id,
+store.item_id item,
+case 
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+
+-- Total Store 
+count(distinct iff(store_action = 'storeEnter', user_id, null)) dau_market_visits,
+count(distinct iff(store_action = 'storeEnter', guid, null)) market_visits,
+count(distinct iff(store_action = 'itemView', user_id, null)) dau_market_views,
+count(distinct iff(store_action = 'itemView', guid, null)) market_views,
+count(distinct iff(num_items_purchased>0 and store_action = 'storeExit',guid,Null)) as converted_market_visits,
+case 
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service
+
+from wwe2k22.events.store_interaction store
+   
+ LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = store.user_country 
+
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07' -- 2022-03-07
+and date_trunc('DAY', collect_inserted_timestamp) < CURRENT_DATE()
+  
+group by 1,2,3,4,5,6,7,8,14
+),
+wrestler_stats as (
+select 
+to_date(COLLECT_INSERTED_TIMESTAMP) date,
+to_number(ltrim(CARD_ID_HEX,'0x'),'XXXXXXXXXXXXXXXX') card_id_decoded,
+orv ovr,
+RARITY,
+NAME_LOC_TEXT as name,
+SERIES_ID,
+user_country country_code,
+case 
+ when platform = 'PC_CLIENT' then 'Windows'
+ when platform = 'PS5' then 'PS5'
+ when platform = 'XSX' then 'XBSX'
+ when platform = 'XBOXONE' then 'XB1'
+ when platform = 'PS4' then 'PS4'
+ else 'New' || platform end platform,
+hardware,
+case 
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct MATCH_GUID) as matches,
+count(distinct user_id) as players
+from 
+"WWE2K22"."EVENTS"."MATCH_ROSTER" mr
+left join 
+ (select distinct CARD_ID CARDID_dec, orv,NAME_LOC_TEXT,RARITY,SERIES_ID from "WWE2K22"."REFERENCE"."MF_CARDS" Card) mfc
+ on TRY_CAST(card_id_decoded as INTEGER) = TRY_CAST(mfc.CARDID_dec as INTEGER)
+where game_mode = 'MyFaction'
+and AI = 1
+and card_id_decoded is not null
+    and name is not null
+group by 1,2,3,4,5,6,7,8,9,10
+)
+  
+  
+Select
+item_detail.date,
+item_detail.user_country,
+country,
+territory,
+region,
+item_detail.item_id,
+case 
+ when item_detail.item_type = 'Pack' then NAME_LOC_TEXT 
+ when item_detail.item_type = 'Card' then token_name
+end item,
+currency_type store_name,
+item_detail.platform,
+
+-- Total Store 
+dau_market_visits,
+market_visits,
+dau_market_views,
+market_views,
+dau_market_purchase,
+market_purchase,
+converted_market_visits,
+mf_store.service,
+currency_type,
+item_detail.item_id gained_item_id,
+item_detail.item_type gained_item_type,
+Currency_amount,
+series as pack_series,
+pack_quantity, 
+card_rarity,
+item_detail.ovr,
+wrestler_stats.series_id series_source,
+matches,
+players
+from item_detail
+LEFT JOIN mf_store
+on item_detail.item_id = mf_store.item_id 
+and item_detail.date = mf_store.date
+and item_detail.platform = mf_store.platform 
+and item_detail.user_country = mf_store.country_code
+
+LEFT JOIN wrestler_stats
+on item_detail.cardid = wrestler_stats.card_id_decoded 
+and item_detail.date = wrestler_stats.date
+and item_detail.platform = wrestler_stats.platform 
+and item_detail.user_country = wrestler_stats.country_code
+
+
+
+UNION all
+-- store credit
+select 
+to_date(collect_inserted_timestamp) date,
+store.user_country country_code,
+ifnull(country.name, 'Unknown') AS country,
+ifnull(country.territory_name, 'Unknown') AS territory,
+ifnull(country.region_name, 'Unknown') AS region,
+store.item_value item_id,
+store.item_detail item,
+currency_type store_name,
+case 
+when store.platform = 'PC_CLIENT' then 'Windows'
+when store.platform = 'PS5' then 'PS5'
+when store.platform = 'XSX' then 'XBSX'
+when store.platform = 'XBOXONE' then 'XB1'
+when store.platform = 'PS4' then 'PS4'
+else 'New' || store.platform end platform,
+
+-- Total Store 
+null dau_market_visits,
+null market_visits,
+null dau_market_views,
+null market_views,
+count(distinct user_id) dau_market_purchase,
+count(distinct transaction_guid) market_purchase,
+null converted_market_visits,
+case 
+when store.service = 'Steam' then 'Steam'
+when store.service = 'PSN' then 'SEN'
+when store.service = 'XBL' then 'Xbox Live'
+else 'New' || store.service end service,
+store.currency_type,
+store.item_value gained_item_id,
+store.ITEM_TYPE gained_item_type,
+store.Currency_amount::integer Currency_amount,
+null pack_quantity,
+null card_rarity,
+null pack_series,
+null ovr,
+null series_source,
+null matches,
+null players
+
+from WWE2K22.EVENTS.GENERAL_TRANSACTION store
+
+ LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = store.user_country 
+
+where currency_type = 'Store Credit'
+and currency_action = 'Spend'
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07' -- 2022-03-07
+and date_trunc('DAY', collect_inserted_timestamp) < CURRENT_DATE()
+GROUP BY 1,2,3,4,5,6,7,8,9,10,11,12,13,16,17,18,19,20,21,22,23,24,25,26,27,28
+
+UNION all
+
+select 
+date,
+wrestler_stats.country_code,
+ifnull(country.name, 'Unknown') AS country,
+ifnull(country.territory_name, 'Unknown') AS territory,
+ifnull(country.region_name, 'Unknown') AS region,
+null item_id,
+wrestler_stats.name item,
+'Wrestler Stats' store_name,
+platform,
+
+-- Total Store 
+null dau_market_visits,
+null market_visits,
+null dau_market_views,
+null market_views,
+null dau_market_purchase,
+null market_purchase,
+null converted_market_visits,
+service,
+'Wrestler Stats' currency_type,
+null gained_item_id,
+null gained_item_type,
+null Currency_amount,
+null pack_series,
+null pack_quantity,
+rarity card_rarity,
+ovr,
+wrestler_stats.series_id series_source,
+matches,
+players
+
+from wrestler_stats
+
+ LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = wrestler_stats.country_code 

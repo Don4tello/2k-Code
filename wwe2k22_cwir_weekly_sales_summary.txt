@@ -1,0 +1,329 @@
+create or replace view dataanalytics.bi.wwe2k22_cwir_weekly_sales_summary as
+
+WITH VC_REVENUE_ESTIMATES AS 
+(
+  SELECT 
+    DIM_WEEK.WEEK_ENDING AS WEEK_ENDING,
+    DIM_TITLE.DISPLAY_PLATFORM AS PLATFORM,
+    DIM_TITLE.DISPLAY_SERVICE AS SERVICE, 
+    IFNULL(G_TRAN.USER_COUNTRY, 'ZZ') AS COUNTRY_CODE,
+    SUM(STANDARD_PACK_PRICE*PLATFORM_REV_SHARE_ADJSTMNT) AS VC_REV_ESTIMATE
+
+  FROM WWE2K22.EVENTS.GENERAL_TRANSACTION G_TRAN
+      INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+          ON G_TRAN.COLLECT_INSERTED_TIMESTAMP::DATE >= DIM_WEEK.WEEK_STARTING
+              AND G_TRAN.COLLECT_INSERTED_TIMESTAMP::DATE <= DIM_WEEK.WEEK_ENDING
+        INNER JOIN (VALUES
+                (5000, 1.99),
+                (15000, 4.99),
+                (35000, 9.99), 
+                (75000, 19.99), 
+                (200000, 49.99), 
+                (450000, 99.99)
+            ) AS PACK_PRICES (CURRENCY_AMOUNT, STANDARD_PACK_PRICE)
+                ON G_TRAN.CURRENCY_AMOUNT = PACK_PRICES.CURRENCY_AMOUNT
+        INNER JOIN REFERENCE.TITLE.DIM_TITLE
+            ON DIM_TITLE.TITLE = 'WWE 2K22'
+                AND G_TRAN.PLATFORM = DIM_TITLE.PLATFORM
+                AND G_TRAN.SERVICE = DIM_TITLE.SERVICE
+        INNER JOIN (VALUES
+                    ('SEN', 0.725),
+                    ('Steam', 0.7),  
+                    ('Xbox Live', 0.7),
+                    --Not available on the following services, but they'll be here if we ever need them
+                    ('Epic', 0.88),
+                    ('NSO', 0.7)
+        ) AS PLAT_SHARE (SERVICE, PLATFORM_REV_SHARE_ADJSTMNT)
+            ON DIM_TITLE.DISPLAY_SERVICE = PLAT_SHARE.SERVICE
+  
+  WHERE CURRENCY_ACTION = 'Purchase'
+      AND CURRENCY_TYPE = 'VC'
+      AND COLLECT_INSERTED_TIMESTAMP::DATE >= '2022-03-07'
+      AND COLLECT_INSERTED_TIMESTAMP::DATE < CURRENT_DATE()
+      AND COLLECT_INSERTED_TIMESTAMP::DATE >= CURRENT_DATE() - 2
+
+  GROUP BY 1, 2, 3, 4
+),
+
+SALES_ACTUALS AS (
+  SELECT
+      DIM_WEEK.WEEK_ENDING, 
+      PLATFORM_CODE AS PLATFORM,
+      CASE
+            WHEN PLATFORM_CODE = 'XB1' THEN 'Xbox Live'
+            WHEN PLATFORM_CODE = 'XBSX' THEN 'Xbox Live'
+            WHEN PLATFORM_CODE = 'Windows' THEN 'Steam'
+            WHEN PLATFORM_CODE = 'NSW' THEN 'NSO'
+            WHEN PLATFORM_CODE = 'PS4' THEN 'SEN'
+            WHEN PLATFORM_CODE = 'PS5' THEN 'SEN'
+            WHEN PLATFORM_CODE = 'Stadia' THEN 'Stadia'
+            END AS SERVICE_INFERRED,
+      COUNTRY_CODE, 
+      /*SELL THRU METRICS*/
+      SUM(CASE WHEN PRODUCT_TYPE = 'Full Game' THEN SELL_THRU_UNITS END) AS SELL_THRU_BASE_GAME,
+      SUM(CASE WHEN PRODUCT_TYPE = 'Full Game' AND TITLE_CODE = 'WWE022' THEN SELL_THRU_UNITS END) AS SELL_THRU_BASE_GAME_STANDARD,
+      SUM(CASE WHEN PRODUCT_TYPE = 'Full Game' AND TITLE_CODE = 'WWE22R' THEN SELL_THRU_UNITS END) AS SELL_THRU_BASE_GAME_NWO_EDITION,
+      SUM(CASE WHEN PRODUCT_TYPE = 'Full Game' AND TITLE_CODE = 'WWE22T' THEN SELL_THRU_UNITS END) AS SELL_THRU_BASE_GAME_DELUXE_EDITION,
+      SUM(CASE WHEN PRODUCT_TYPE = 'Full Game' AND TITLE_CODE = 'WWE22U' THEN SELL_THRU_UNITS END) AS SELL_THRU_BASE_GAME_CROSSGEN_SUPER,
+      SUM(CASE WHEN PRODUCT_TYPE IN ('Expansion Pack', 'Expansion', 'Minor Expansion') AND TITLE_CODE <> 'WWE22D' /*SEASON PASS*/ THEN SELL_THRU_UNITS END) AS SELL_THRU_DLC,
+      SUM(CASE WHEN TITLE_CODE = 'WWE22E' THEN SELL_THRU_UNITS END) AS SELL_THRU_DLC_SUPERCHARGER,
+      SUM(CASE WHEN TITLE_CODE = 'WWE22F' THEN SELL_THRU_UNITS END) AS SELL_THRU_DLC_MY_RISE_MEGA_BOOST,
+      SUM(CASE WHEN TITLE_CODE = 'WWE22K' THEN SELL_THRU_UNITS END) AS SELL_THRU_DLC_NWO_CONTENT,
+      SUM(CASE WHEN TITLE_CODE = 'WWE22J' THEN SELL_THRU_UNITS END) AS SELL_THRU_DLC_PREORDER_CONTENT,
+      SUM(CASE WHEN TITLE_CODE = 'WWE22D' THEN SELL_THRU_UNITS END) AS SELL_THRU_SEASON_PASS, 
+      /*PLACEHODER SELL THRU METRICS*/
+      SUM(CASE WHEN TITLE_CODE = 'WWE22A' THEN SELL_THRU_UNITS END) AS SELL_THRU_DLC_1,
+      SUM(CASE WHEN TITLE_CODE = 'WWE22B' THEN SELL_THRU_UNITS END) AS SELL_THRU_DLC_2,
+      SUM(CASE WHEN TITLE_CODE = 'WWE22C' THEN SELL_THRU_UNITS END) AS SELL_THRU_DLC_3,
+      SUM(CASE WHEN TITLE_CODE = 'WWE22G' THEN SELL_THRU_UNITS END) AS SELL_THRU_DLC_4,
+      SUM(CASE WHEN TITLE_CODE = 'WWE22H' THEN SELL_THRU_UNITS END) AS SELL_THRU_DLC_5, 
+      
+      /*REVENUE METRICS*/
+      SUM(CASE WHEN PRODUCT_TYPE IN ('Expansion Pack', 'Expansion', 'Minor Expansion') AND TITLE_CODE <> 'WWE22D' /*SEASON PASS*/ THEN SELL_IN_REVENUE END) AS REVENUE_DLC,
+      SUM(CASE WHEN TITLE_CODE = 'WWE22D' THEN SELL_IN_REVENUE ELSE 0 END) AS REVENUE_SEASON_PASS,
+      SUM(CASE WHEN DATE < CURRENT_DATE() - 2 THEN VIRTUAL_CURRENCY_REVENUE ELSE 0 END) AS VC_REVENUE_ACTUAL --We estimate after this date
+
+  FROM "DATAANALYTICS"."BI"."WWE2K22_SALES_METRICS" SALES
+      INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+          ON SALES.DATE >= DIM_WEEK.WEEK_STARTING
+              AND SALES.DATE <= DIM_WEEK.WEEK_ENDING
+
+  WHERE SALES.TITLE = 'WWE 2K22'
+
+  GROUP BY 1, 2, 3, 4
+), 
+time_spent_wau as (
+    Select
+DIM_WEEK.WEEK_ENDING,
+user_country country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct iff(mode_status = 'ModeEnter', user_id, null)) my_faction_wau,
+CURRENT_DATE()-1 reporting_date
+from WWE2K22.EVENTS.MODE_STATUS MS
+         INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+            ON MS.collect_inserted_timestamp >= DIM_WEEK.WEEK_STARTING
+                AND MS.collect_inserted_timestamp <= DIM_WEEK.WEEK_ENDING
+ LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = ms.user_country        
+where sub_mode not in ('Inactive', 'Suspended') 
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1
+and game_mode =  'MyFaction' -- done in a later stage using sub_modes from online
+group by 1,2,3,4,5,6,7
+)
+,
+ltd_myfaction_users as (
+    Select
+user_country country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct iff(mode_status = 'ModeEnter', user_id, null)) ltd_my_faction_dau,
+CURRENT_DATE()-1 reporting_date
+from WWE2K22.EVENTS.MODE_STATUS MS
+ LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = ms.user_country        
+where sub_mode not in ('Inactive', 'Suspended') 
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1
+and game_mode =  'MyFaction' -- done in a later stage using sub_modes from online
+group by 1,2,3,4,5,6
+)
+,
+daily_users as (
+
+Select
+USER_COUNTRY country_code,
+week_ending,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct user_id) wau
+from wwe2k22.events.session_started
+    
+             INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+            ON collect_inserted_timestamp >= DIM_WEEK.WEEK_STARTING
+                AND collect_inserted_timestamp <= DIM_WEEK.WEEK_ENDING
+    
+where date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) < CURRENT_DATE()
+group by 1,2,3,4 )
+,
+ltd_users as (
+
+Select
+USER_COUNTRY country_code,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct user_id) ltd_dau
+from wwe2k22.events.session_started
+
+where date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) < CURRENT_DATE()
+group by 1,2,3 )
+,
+spenders_cte as (
+select
+WEEK_ENDING, 
+case 
+ when platform = 'PC_CLIENT' then 'Windows'
+ when platform = 'PS5' then 'PS5'
+ when platform = 'XSX' then 'XBSX'
+ when platform = 'XBOXONE' then 'XB1'
+ when platform = 'PS4' then 'PS4'
+ else 'New' || platform end platform,
+  case 
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+user_country country_code,
+count(distinct user_id) spenders
+  
+from WWE2K22.EVENTS.GENERAL_TRANSACTION gt
+
+INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+ ON gt.collect_inserted_timestamp >= DIM_WEEK.WEEK_STARTING
+ AND gt.collect_inserted_timestamp <= DIM_WEEK.WEEK_ENDING
+
+where currency_action = 'Spend'
+and game_mode = 'MyFaction'
+and currency_type = 'VC'
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07' // get rid of some of the dev data -- 2022-03-07
+and date_trunc('DAY', collect_inserted_timestamp) < CURRENT_DATE()
+group by 1,2,3,4)
+
+/*
+- 9030 ROWS IN OVERALL DIM TABLE
+- 2365 ROWS IN SALES TABLE 
+*/
+SELECT      
+    DIM.WEEK_ENDING,
+    DIM.PLATFORM, 
+    DIM.SERVICE,
+    DIM.COUNTRY_CODE,
+    
+    --SELL_THRU
+    ZEROIFNULL(SELL_THRU_BASE_GAME) AS SELL_THRU_BASE_GAME,
+    ZEROIFNULL(SELL_THRU_BASE_GAME_STANDARD) AS SELL_THRU_BASE_GAME_STANDARD,
+    ZEROIFNULL(SELL_THRU_BASE_GAME_NWO_EDITION) AS SELL_THRU_BASE_GAME_NWO_EDITION,
+    ZEROIFNULL(SELL_THRU_BASE_GAME_DELUXE_EDITION) AS SELL_THRU_BASE_GAME_DELUXE_EDITION,
+    ZEROIFNULL(SELL_THRU_BASE_GAME_CROSSGEN_SUPER) AS SELL_THRU_BASE_GAME_CROSSGEN_SUPER,
+    
+    ZEROIFNULL(SELL_THRU_DLC) AS SELL_THRU_DLC,
+    ZEROIFNULL(SELL_THRU_DLC_SUPERCHARGER) AS SELL_THRU_DLC_SUPERCHARGER,
+    ZEROIFNULL(SELL_THRU_DLC_MY_RISE_MEGA_BOOST) AS SELL_THRU_DLC_MY_RISE_MEGA_BOOST,
+    ZEROIFNULL(SELL_THRU_DLC_NWO_CONTENT) AS SELL_THRU_DLC_NWO_CONTENT,
+    ZEROIFNULL(SELL_THRU_DLC_PREORDER_CONTENT) AS SELL_THRU_DLC_PREORDER_CONTENT,
+    ZEROIFNULL(SELL_THRU_SEASON_PASS) AS SELL_THRU_SEASON_PASS, 
+    ZEROIFNULL(SELL_THRU_DLC_1) AS SELL_THRU_DLC_1,
+    ZEROIFNULL(SELL_THRU_DLC_2) AS SELL_THRU_DLC_2,
+    ZEROIFNULL(SELL_THRU_DLC_3) AS SELL_THRU_DLC_3,
+    ZEROIFNULL(SELL_THRU_DLC_4) AS SELL_THRU_DLC_4,
+    ZEROIFNULL(SELL_THRU_DLC_5) AS SELL_THRU_DLC_5,
+    
+    -- REVENUE METRICS
+    ZEROIFNULL(REVENUE_DLC) AS REVENUE_DLC,
+    ZEROIFNULL(REVENUE_SEASON_PASS) AS REVENUE_SEASON_PASS,
+    ZEROIFNULL(VC_REVENUE_ACTUAL) + ZEROIFNULL(VC_REV_ESTIMATE) AS VC_REVENUE,
+    ifnull(country.name, 'Unknown') AS country_name,
+    ifnull(country.territory_name, 'Unknown') AS territory_name,
+    ifnull(country.region_name, 'Unknown') AS region_name,
+    my_faction_wau,
+    wau,
+    spenders,
+    ltd_dau,
+    ltd_my_faction_dau
+
+--First view is our master dimension table, removes the dependency on any one event table
+FROM DATAANALYTICS.BI.WWE2K22_CWIR_DIMENSION_VIEW DIM
+-- All tables/ctes are rolled up to the aggregation level of the dim table
+
+    LEFT JOIN VC_REVENUE_ESTIMATES
+        ON DIM.WEEK_ENDING = VC_REVENUE_ESTIMATES.WEEK_ENDING
+            AND DIM.PLATFORM = VC_REVENUE_ESTIMATES.PLATFORM
+            AND DIM.SERVICE = VC_REVENUE_ESTIMATES.SERVICE
+            AND DIM.COUNTRY_CODE = VC_REVENUE_ESTIMATES.COUNTRY_CODE
+            
+    LEFT JOIN SALES_ACTUALS 
+        ON DIM.WEEK_ENDING = SALES_ACTUALS.WEEK_ENDING
+            AND DIM.PLATFORM = SALES_ACTUALS.PLATFORM 
+            AND DIM.SERVICE = SALES_ACTUALS.SERVICE_INFERRED
+            AND DIM.COUNTRY_CODE = SALES_ACTUALS.COUNTRY_CODE
+            
+    LEFT JOIN time_spent_wau 
+        ON DIM.WEEK_ENDING = time_spent_wau.WEEK_ENDING
+            AND DIM.PLATFORM = time_spent_wau.PLATFORM 
+            AND DIM.SERVICE = time_spent_wau.SERVICE
+            AND DIM.COUNTRY_CODE = time_spent_wau.COUNTRY_CODE    
+            
+    LEFT JOIN daily_users 
+        ON DIM.WEEK_ENDING = daily_users.WEEK_ENDING
+            AND DIM.PLATFORM = daily_users.PLATFORM 
+            AND DIM.SERVICE = daily_users.SERVICE
+            AND DIM.COUNTRY_CODE = daily_users.COUNTRY_CODE    
+            
+    LEFT JOIN spenders_cte 
+        ON DIM.WEEK_ENDING = spenders_cte.WEEK_ENDING
+            AND DIM.PLATFORM = spenders_cte.PLATFORM 
+            AND DIM.SERVICE = spenders_cte.SERVICE
+            AND DIM.COUNTRY_CODE = spenders_cte.COUNTRY_CODE    
+    
+        LEFT JOIN ltd_users 
+            on DIM.PLATFORM = ltd_users.PLATFORM 
+            AND DIM.SERVICE = ltd_users.SERVICE
+            AND DIM.COUNTRY_CODE = ltd_users.COUNTRY_CODE    
+            
+        LEFT JOIN ltd_myfaction_users 
+            on DIM.PLATFORM = ltd_myfaction_users.PLATFORM 
+            AND DIM.SERVICE = ltd_myfaction_users.SERVICE
+            AND DIM.COUNTRY_CODE = ltd_myfaction_users.COUNTRY_CODE    
+            
+           LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = DIM.country_code  
+    

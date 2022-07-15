@@ -1,0 +1,185 @@
+
+CREATE OR REPLACE VIEW dataanalytics.bi.wwe2k22_cwir_my_rise_funnel as
+
+Select 
+'Created a build' funnel_stage, 
+user_country country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct user_id) players,  
+  Count(distinct(iff(date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-8
+, user_id, null ))) players_pw   
+from wwe2k22.events.creations
+         LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = user_country  
+where
+CAS_EDITOR_PARAM  ='Mode' 
+and event_name = 'casEditorEditStr'
+and collect_inserted_timestamp>='2022-03-07'
+
+group by 1,2,3,4,5,6,7
+
+UNION ALL
+
+	select 
+    'Played first game' funnel_stage, 
+user_country country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct user_id) players,  
+  Count(distinct(iff(date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-8
+, user_id, null ))) players_pw 
+
+  from wwe2k22.events.match_status
+           LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = user_country 
+  where match_status = 'End'
+  and game_mode = 'MyCareer'
+  and collect_inserted_timestamp>='2022-03-07'
+group by 1,2,3,4,5,6,7
+  
+  UNION ALL
+  
+  Select 	
+    'Played 5 games' funnel_stage, 
+    country_code,
+country_name,
+territory_name,
+region_name,
+platform,
+service,
+    count(distinct user_id) players,
+    count(distinct iff(matches_played_pw >=5, user_id, null)) players_pw
+    from 
+    (select 
+  user_id,
+     user_country country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+  count(distinct guid) as matches_played,
+Count(distinct(iff(date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-8
+, guid, null ))) matches_played_pw 
+  from wwe2k22.events.match_status
+              LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = user_country 
+  where match_status = 'End'
+  and game_mode = 'MyCareer'
+  and collect_inserted_timestamp>='2022-03-07'
+group by 1,2,3,4,5,6,7
+  having matches_played>=5 )
+group by 1,2,3,4,5,6,7
+  
+UNION ALL
+
+select
+    'Completed Performance Center' funnel_stage, 
+    user_country country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+    count(distinct user_id) players,
+    Count(distinct(iff(date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-8
+, user_id, null ))) players_pw 
+from WWE2K22.EVENTS.MY_CAREER_PROGRESSION
+         LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = user_country 
+where NODE_FINISHED = 1
+and story_id in ('10600','10800','30800','30900')
+ and collect_inserted_timestamp>='2022-03-07'
+
+group by 1,2,3,4,5,6,7
+
+UNION ALL
+
+select
+    'Drafted to Raw/Smackdown' funnel_stage, 
+    user_country country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+    count(distinct user_id) players,
+    Count(distinct(iff(date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-8
+, user_id, null ))) players_pw 
+    
+from WWE2K22.EVENTS.MY_CAREER_PROGRESSION
+         LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = user_country 
+where story_id in ('55000','55800','54800','26500', //mens raw
+                   '40000','57700','40200','55700','55200',//womens raw
+                   '23200','53800','24800','53900','23000','53300', //mens smackdown
+                   '38600','56600','39700','56900','54000', //womens smackdown
+                   '19800','51500','17800','51300','51800', //nxt mens
+                   '36800','51000','35300','35100','35200','51100'//nxt womens
+                  )
+ and collect_inserted_timestamp>='2022-03-07'
+group by 1,2,3,4,5,6,7;
+
+

@@ -1,0 +1,331 @@
+--CREATE OR REPLACE VIEW dataanalytics.bi.wwe2k22_cwir_modes as
+WITH time_spent_wau as (Select
+DIM_WEEK.WEEK_ENDING WEEK,
+user_country country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+game_mode mode,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct iff(mode_status = 'ModeEnter', user_id, null)) wau,
+(sum(
+    iff(
+        (SUB_MODE_STATUS = 'ModeLeft' or SUB_MODE_STATUS = 'SubModeLeft'
+or SUB_MODE_STATUS = 'AppClose' or SUB_MODE_STATUS = 'ModeSuspendStart'),SUB_MODE_TIME_SPENT, null))
+ )/60 TIME_SPENT,
+CURRENT_DATE()-1 reporting_date
+from WWE2K22.EVENTS.MODE_STATUS MS
+         INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+            ON MS.collect_inserted_timestamp >= DIM_WEEK.WEEK_STARTING
+                AND MS.collect_inserted_timestamp <= DIM_WEEK.WEEK_ENDING
+ LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = ms.user_country        
+where sub_mode not in ('Inactive', 'Suspended') 
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1
+and game_mode <>  'Online' -- done in a later stage using sub_modes from online
+group by 1,2,3,4,5,6,7,8
+UNION ALL
+Select
+DIM_WEEK.WEEK_ENDING WEEK,
+user_country country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+case when sub_mode = 'Not Applicable' and game_mode =
+    'Universe' then 'Universe Screens'
+    when sub_mode = 'Not Applicable' and game_mode =
+    'FTUEMatch' then 'FTUEMatch'
+    when sub_mode = 'Not Applicable' then concat(game_mode,' Screen') 
+    when sub_mode in ('Lobbies', 'TonightsMatch', 'QuickPlay')  then 'Online'
+                        else sub_mode end mode,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct iff(sub_mode_status = 'SubModeEnter', user_id, null)) wau,
+((sum(
+    iff(
+        (SUB_MODE_STATUS = 'ModeLeft' or SUB_MODE_STATUS = 'SubModeLeft'
+or SUB_MODE_STATUS = 'AppClose' or SUB_MODE_STATUS = 'ModeSuspendStart'),SUB_MODE_TIME_SPENT, null))
+ )/60) TIME_SPENT,
+ CURRENT_DATE()-1 reporting_date
+from WWE2K22.EVENTS.MODE_STATUS MS
+         INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+            ON MS.collect_inserted_timestamp >= DIM_WEEK.WEEK_STARTING
+                AND MS.collect_inserted_timestamp <= DIM_WEEK.WEEK_ENDING
+       LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = ms.user_country            
+where sub_mode not in ('Inactive', 'Suspended') 
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1
+group by 1,2,3,4,5,6,7,8
+UNION ALL
+Select
+DIM_WEEK.WEEK_ENDING WEEK,
+USER_COUNTRY country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+'Overall' mode,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct user_id) wau,
+null time_spend,
+CURRENT_DATE()-1 reporting_date
+from wwe2k22.events.session_started ss
+         INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+            ON ss.collect_inserted_timestamp >= DIM_WEEK.WEEK_STARTING
+                AND ss.collect_inserted_timestamp <= DIM_WEEK.WEEK_ENDING
+         LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = ss.user_country  
+where
+date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1 
+group by 1,2,3,4,5,6,7,8
+
+),
+matches as (select
+DIM_WEEK.WEEK_ENDING WEEK,
+USER_COUNTRY country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+game_mode mode,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct iff(match_status = 'Start',guid, null)) match_start,
+count(distinct iff(match_status = 'End',guid, null)) match_end,
+count(distinct iff(match_status = 'End' and win = 0,guid, null)) match_win
+from WWE2K22.EVENTS.MATCH_STATUS ms
+         INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+            ON MS.collect_inserted_timestamp >= DIM_WEEK.WEEK_STARTING
+                AND MS.collect_inserted_timestamp <= DIM_WEEK.WEEK_ENDING
+       LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = ms.user_country  
+where
+date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1 
+and game_mode <> 'Online'
+group by 1,2,3,4,5,6,7,8
+UNION ALL
+select
+DIM_WEEK.WEEK_ENDING WEEK,
+USER_COUNTRY country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+case when sub_mode = 'Not Applicable' and game_mode =
+    'Universe' then 'Universe Screens'
+    when sub_mode = 'Not Applicable' and game_mode =
+    'FTUEMatch' then 'FTUEMatch'
+    when sub_mode = 'Not Applicable' then concat(game_mode,' Screen') 
+    when sub_mode in ('Lobbies', 'TonightsMatch', 'QuickPlay')  then 'Online'
+                        else sub_mode end mode,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct iff(match_status = 'Start',guid, null)) match_start,
+count(distinct iff(match_status = 'End',guid, null)) match_end,
+count(distinct iff(match_status = 'End' and win = 0,guid, null)) match_win
+from WWE2K22.EVENTS.MATCH_STATUS ms
+         INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+            ON MS.collect_inserted_timestamp >= DIM_WEEK.WEEK_STARTING
+                AND MS.collect_inserted_timestamp <= DIM_WEEK.WEEK_ENDING
+       LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = ms.user_country  
+where 
+date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1 
+group by 1,2,3,4,5,6,7,8
+),
+time_spent_avg_dau_stg_1 as (Select
+date_trunc('DAY', collect_inserted_timestamp) date,
+user_country country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+game_mode mode,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct iff(mode_status = 'ModeEnter', user_id, null)) dau
+from WWE2K22.EVENTS.MODE_STATUS MS
+ LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = ms.user_country        
+where sub_mode not in ('Inactive', 'Suspended') 
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1
+and game_mode <> 'Online'
+group by 1,2,3,4,5,6,7,8
+UNION ALL
+Select
+date_trunc('DAY', collect_inserted_timestamp) date,
+user_country country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+case when sub_mode = 'Not Applicable' and game_mode =
+    'Universe' then 'Universe Screens'
+    when sub_mode = 'Not Applicable' and game_mode =
+    'FTUEMatch' then 'FTUEMatch'
+    when sub_mode = 'Not Applicable' then concat(game_mode,' Screen') 
+    when sub_mode in ('Lobbies', 'TonightsMatch', 'QuickPlay')  then 'Online'
+                        else sub_mode end mode,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct iff(sub_mode_status = 'SubModeEnter', user_id, null)) dau
+from WWE2K22.EVENTS.MODE_STATUS MS
+       LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = ms.user_country            
+where sub_mode not in ('Inactive', 'Suspended') 
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1
+group by 1,2,3,4,5,6,7,8
+UNION ALL
+Select
+date_trunc('DAY', collect_inserted_timestamp) date,
+USER_COUNTRY country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+'Overall' mode,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct user_id) dau
+from wwe2k22.events.session_started ss
+         LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = ss.user_country  
+where
+date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1 
+group by 1,2,3,4,5,6,7,8
+),
+time_spent_avg_dau as (
+Select 
+DIM_WEEK.WEEK_ENDING WEEK,
+country_code,
+country_name,
+territory_name,
+region_name,
+mode,
+platform,
+service,
+Sum(dau)/7 avg_dau
+    
+    from time_spent_avg_dau_stg_1 ts
+             INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+            ON ts.date >= DIM_WEEK.WEEK_STARTING
+                AND ts.date <= DIM_WEEK.WEEK_ENDING
+   group by 1,2,3,4,5,6,7,8
+),
+matches as (select
+DIM_WEEK.WEEK_ENDING WEEK,
+USER_COUNTRY country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+game_mode mode,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct iff(match_status = 'Start',guid, null)) match_start,
+count(distinct iff(match_status = 'End',guid, null)) match_end,
+count(distinct iff(match_status = 'End' and win = 0,guid, null)) match_win
+from WWE2K22.EVENTS.MATCH_STATUS ms
+         INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+            ON MS.collect_inserted_timestamp >= DIM_WEEK.WEEK_STARTING
+                AND MS.collect_inserted_timestamp <= DIM_WEEK.WEEK_ENDING
+       LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = ms.user_country  
+where
+date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1 
+and game_mode = 'MyFaction'
+group by 1,2,3,4,5,6,7,8

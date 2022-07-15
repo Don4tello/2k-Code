@@ -1,0 +1,413 @@
+CREATE OR REPLACE VIEW dataanalytics.bi.wwe2k22_ingame_metrics as
+with PLATFORM_AND_SERVICE_MAPPING AS
+(
+SELECT
+*
+
+FROM (values
+('PC_CLIENT', 'Steam', 'Windows', 'Steam'),
+('PS4', 'PSN', 'PS4', 'SEN'),
+('PS5', 'PSN', 'PS5', 'SEN'),
+('XBOXONE', 'XBL', 'XB1', 'Xbox Live'),
+('XSX', 'XBL', 'XBSX', 'Xbox Live')
+) as P_S_MAP (PLATFORM, SERVICE, DISPLAY_PLATFORM, DISPLAY_SERVICE)
+),
+DIM_DATE AS
+(
+SELECT DISTINCT DATE
+
+FROM DATAANALYTICS.REFERENCE.DIM_DATE
+
+WHERE DATE BETWEEN
+(SELECT MIN(EVENT_TIMESTAMP::DATE) FROM "WWE2K22"."EVENTS"."MODE_STATUS")
+AND
+(CURRENT_DATE() )
+ORDER BY 1
+),
+
+
+mode_sessions as (
+Select
+date(date_trunc('DAY', collect_inserted_timestamp)) date,
+user_country country_code,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+--count(distinct user_id) as dau,
+count(distinct iff(game_mode = 'Creations' and sub_mode <>'Not Applicable', user_id, null)) dau_creations,
+count(distinct iff(game_mode = 'MyFaction', user_id, null)) dau_my_faction,
+count(distinct iff(game_mode = 'MyCareer', user_id, null)) dau_my_rise,
+count(distinct iff(game_mode = 'Universe', user_id, null)) dau_universe,
+count(distinct iff(game_mode = 'Online' and sub_mode <>'Not Applicable', user_id, null)) dau_online,
+count(distinct iff(game_mode = 'GM', user_id, null)) dau_my_gm,
+count(distinct iff(game_mode = 'Showcase', user_id, null)) dau_showcase,
+count(distinct iff(game_mode = 'Play', user_id, null)) dau_play
+
+from WWE2K22.EVENTS.MODE_STATUS
+
+
+where date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) < CURRENT_DATE()
+group by 1,2,3,4
+),
+
+daily_users as (
+
+Select
+USER_COUNTRY country_code,
+date_trunc('DAY', collect_inserted_timestamp) date,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct user_id) dau
+from wwe2k22.events.session_started
+where date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) < CURRENT_DATE()
+group by 1,2,3,4
+
+)
+
+,mf_store_sessions as (
+Select
+date_trunc('DAY', collect_inserted_timestamp) date,
+user_country country_code,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+
+-- Total Store
+count(distinct iff(store_action = 'storeEnter', user_id, null)) dau_market_visits,
+count(distinct iff(store_action = 'storeEnter', guid, null)) market_visits,
+count(distinct iff(store_action = 'itemView', user_id, null)) dau_market_views,
+count(distinct iff(store_action = 'itemView', guid, null)) market_views,
+count(distinct iff(store_action = 'itemPurchase', user_id, null)) dau_market_purchase,
+count(distinct iff(store_action = 'itemPurchase', guid, null)) market_purchase,
+count(distinct iff(num_items_purchased>0 and store_action = 'storeExit',guid,Null)) as converted_market_visits,
+
+-- Pack Store
+count(distinct iff(store_action = 'storeEnter' and store_name = 'Pack Market', user_id, null)) dau_pack_market_visits,
+count(distinct iff(store_action = 'storeEnter' and store_name = 'Pack Market', guid, null)) pack_market_visits,
+count(distinct iff(store_action = 'itemView' and store_name = 'Pack Market', user_id, null)) dau_pack_market_views,
+count(distinct iff(store_action = 'itemView' and store_name = 'Pack Market', guid, null)) pack_market_views,
+count(distinct iff(store_action = 'itemPurchase' and store_name = 'Pack Market', user_id, null)) dau_pack_market_purchase,
+count(distinct iff(store_action = 'itemPurchase' and store_name = 'Pack Market', guid, null)) pack_market_purchase,
+count(distinct iff(num_items_purchased>0 and store_name = 'Pack Market' and store_action = 'storeExit',guid,Null)) as converted_pack_market_visits,
+
+-- Token Store
+count(distinct iff(store_action = 'storeEnter' and store_name = 'Token Market', user_id, null)) dau_token_market_visits,
+count(distinct iff(store_action = 'storeEnter' and store_name = 'Token Market', guid, null)) token_market_visits,
+count(distinct iff(store_action = 'itemView' and store_name = 'Token Market', user_id, null)) dau_token_market_views,
+count(distinct iff(store_action = 'itemView' and store_name = 'Token Market', guid, null)) token_market_views,
+count(distinct iff(store_action = 'itemPurchase' and store_name = 'Token Market', user_id, null)) dau_token_market_purchase,
+count(distinct iff(store_action = 'itemPurchase' and store_name = 'Token Market', guid, null)) token_market_purchase,
+count(distinct iff(num_items_purchased>0 and store_name = 'Token Market' and store_action = 'storeExit',guid,Null)) as converted_token_market_visits
+
+from wwe2k22.events.store_interaction
+
+where date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) < CURRENT_DATE()
+
+group by 1,2,3,4
+),
+
+market_spend as ( select
+date_trunc('DAY', collect_inserted_timestamp) date,
+user_country country_code,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct iff(currency_type = 'MFP' and transaction_source = 'Pack Market' and currency_action = 'Spend', user_id, null)) pack_market_spenders,
+Sum( iff(currency_type = 'MFP' and transaction_source = 'Pack Market' and currency_action = 'Spend', currency_amount, null)) pack_market_spend,
+count(distinct iff(currency_type = 'Tokens' and transaction_source = 'Token Market' and currency_action = 'Spend', user_id, null)) token_market_spenders,
+Sum( iff(currency_type = 'Tokens' and transaction_source = 'Token Market' and currency_action = 'Spend', currency_amount, null)) token_market_spend,
+Sum( iff(game_mode = 'MyFaction' and currency_type = 'VC' and currency_action = 'Spend', currency_amount, null)) vc_market_spend,
+Sum( iff(game_mode = 'MyFaction' and currency_type = 'MFP' and currency_action = 'Spend', currency_amount, null)) mfp_market_spend,
+Sum( iff(transaction_source = 'StoreUnlockBonusDLC' and currency_type = 'Store Credit' and currency_action = 'Earn', currency_amount, null)) store_credit_dlc_unlock,
+Sum( iff(transaction_source = 'Match Result Reward' and currency_type = 'Store Credit' and currency_action = 'Earn' and game_mode = 'Universe', currency_amount, null)) store_credit_universe_match,
+Sum( iff(transaction_source = 'Match Result Reward' and currency_type = 'Store Credit' and currency_action = 'Earn' and game_mode = 'Play', currency_amount, null)) store_credit_play_match,
+Sum( iff(transaction_source = 'Match Result Reward' and currency_type = 'Store Credit' and currency_action = 'Earn' and game_mode = 'Online', currency_amount, null)) store_credit_online_match,
+Sum( iff(transaction_source = 'Reward' and currency_type = 'Store Credit' and currency_action = 'Earn' and game_mode = 'Showcase', currency_amount, null)) store_credit_showcase_match,
+Sum( iff(transaction_source = 'MyCareerBonusDLC' and currency_type = 'Store Credit' and currency_action = 'Earn', currency_amount, null)) store_credit_my_rise_dlc_bonus,
+    -- VC             
+    SUM(CASE WHEN CURRENCY_TYPE = 'VC' AND CURRENCY_ACTION = 'Purchase' THEN CURRENCY_AMOUNT ELSE NULL END) AS VC_PURCHASE,
+    SUM(CASE WHEN CURRENCY_TYPE = 'VC' AND CURRENCY_ACTION = 'Spend' THEN CURRENCY_AMOUNT END) AS VC_SPEND,
+    --MFP
+    SUM(CASE WHEN CURRENCY_TYPE = 'MFP' AND CURRENCY_ACTION = 'Earn' THEN CURRENCY_AMOUNT ELSE NULL END) AS MFP_EARN,
+    SUM(CASE WHEN CURRENCY_TYPE = 'MFP' AND CURRENCY_ACTION = 'Spend' THEN CURRENCY_AMOUNT ELSE NULL END) AS MFP_SPEND,
+    --Tokens
+    SUM(CASE WHEN CURRENCY_TYPE = 'Tokens' AND CURRENCY_ACTION = 'Earn' THEN CURRENCY_AMOUNT ELSE NULL END) AS TOKENS_EARN,
+    SUM(CASE WHEN CURRENCY_TYPE = 'Tokens' AND CURRENCY_ACTION = 'Spend' THEN CURRENCY_AMOUNT ELSE NULL END) AS TOKENS_SPEND,
+    -- store credit
+    SUM(CASE WHEN CURRENCY_TYPE = 'Store Credit' AND CURRENCY_ACTION = 'Earn' AND transaction_source <> 'StoreUnlockBonusDLC' THEN CURRENCY_AMOUNT ELSE NULL END) AS STORE_CREDIT_EARN,
+    SUM(CASE WHEN CURRENCY_TYPE = 'Store Credit' AND CURRENCY_ACTION = 'Spend' THEN CURRENCY_AMOUNT ELSE NULL END) AS STORE_CREDIT_SPEND
+
+from
+WWE2K22.EVENTS.GENERAL_TRANSACTION
+
+where currency_action in ('Spend', 'Earn', 'Purchase')
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) < CURRENT_DATE()
+
+group by 1,2,3,4
+),
+battles as (
+select
+date(start_date) date,
+user_country country_code,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+-- Faction Wars
+count(distinct iff(match_status = 'Start' and sub_mode = 'MFFactionWars',guid,Null)) as faction_wars_game_starts,
+count(distinct iff(match_status = 'End' and reason = 'Match End' and sub_mode = 'MFFactionWars' and win = 0, guid, null)) as faction_wars_game_wins,
+count(distinct iff(match_status = 'End' and reason = 'Match End' and sub_mode = 'MFFactionWars' and win <> 0, guid, null)) as faction_wars_game_loses,
+count(distinct iff(match_status = 'End' and reason = 'Match End' and sub_mode = 'MFFactionWars', guid, null)) as faction_wars_game_end,
+count(distinct iff(sub_mode = 'MFFactionWars', user_id, null)) as faction_wars_players,
+-- Proving Grounds
+count(distinct iff(match_status = 'Start' and sub_mode = 'MFProvingGrounds',guid,Null)) as proving_grounds_game_starts,
+count(distinct iff(match_status = 'End' and reason = 'Match End' and sub_mode = 'MFProvingGrounds' and win = 0, guid, null)) as proving_grounds_game_wins,
+count(distinct iff(match_status = 'End' and reason = 'Match End'  and sub_mode = 'MFProvingGrounds' and win <> 0, guid, null)) as proving_grounds_game_loses,
+count(distinct iff(match_status = 'End' and reason = 'Match End'  and sub_mode = 'MFProvingGrounds', guid, null)) as proving_grounds_game_end,
+count(distinct iff(sub_mode = 'MFProvingGrounds', user_id, null)) as proving_grounds_players,
+-- Weekly Towers
+count(distinct iff(match_status = 'Start' and sub_mode = 'MFWeeklyTowers',guid,Null)) as weekly_towers_game_starts,
+count(distinct iff(match_status = 'End' and reason = 'Match End' and sub_mode = 'MFWeeklyTowers' and win = 0, guid, null)) as weekly_towers_game_wins,
+count(distinct iff(match_status = 'End' and reason = 'Match End'  and sub_mode = 'MFWeeklyTowers' and win <> 0, guid, null)) as weekly_towers_game_loses,
+count(distinct iff(match_status = 'End' and reason = 'Match End'  and sub_mode = 'MFWeeklyTowers', guid, null)) as weekly_towers_game_end,
+count(distinct iff(sub_mode = 'MFWeeklyTowers', user_id, null)) as weekly_towers_players,
+
+-- MyRise
+count(distinct iff(match_status = 'Start' and game_mode = 'MyCareer',guid,Null)) as my_rise_game_starts,
+count(distinct iff(match_status = 'End' and reason = 'Match End'  and game_mode = 'MyCareer' and win = 0, guid, null)) as my_rise_game_wins,
+count(distinct iff(match_status = 'End' and reason = 'Match End'  and game_mode = 'MyCareer' and win <> 0, guid, null)) as my_rise_game_loses,
+count(distinct iff(match_status = 'End' and reason = 'Match End'  and game_mode = 'MyCareer', guid, null)) as my_rise_game_end,
+count(distinct iff(game_mode = 'MyCareer', user_id, null)) as my_rise_players,
+
+-- Online
+count(distinct iff(match_status = 'Start' and game_mode = 'Online',guid,Null)) as online_game_starts,
+count(distinct iff(match_status = 'End' and reason = 'Match End'  and game_mode = 'Online' and win = 0, guid, null)) as online_game_wins,
+count(distinct iff(match_status = 'End' and reason = 'Match End'  and game_mode = 'Online' and win <> 0, guid, null)) as online_game_loses,
+count(distinct iff(match_status = 'End' and reason = 'Match End'  and game_mode = 'Online', guid, null)) as online_game_end,
+count(distinct iff(game_mode = 'Online', user_id, null)) as online_players,
+
+-- Online Sub Mode
+count(distinct iff(sub_mode = 'Lobbies', user_id, null)) as lobbies_players,
+count(distinct iff(sub_mode = 'QuickPlay', user_id, null)) as quickplay_players,
+count(distinct iff(sub_mode = 'TonightsMatch', user_id, null)) as tonightsmatch_players,
+count(distinct iff(sub_mode = 'Lobbies', guid, null)) as lobbies_game_starts,
+count(distinct iff(sub_mode = 'QuickPlay', guid, null)) as quickplay_game_starts,
+count(distinct iff(sub_mode = 'TonightsMatch', guid, null)) as tonightsmatch_game_starts
+
+from WWE2K22.EVENTS.MATCH_STATUS s1
+
+left join (select user_id uid, guid g_uid, min(collect_inserted_timestamp) as start_date from WWE2K22.events.MATCH_STATUS where match_status = 'Start' group by 1, 2) s2
+on s1.guid = s2.g_uid and s1.user_id = s2.uid
+
+
+where game_mode in ('MyFaction', 'MyCareer', 'Online')
+and start_date>='2022-03-07'
+and start_date < CURRENT_DATE()
+group by 1,2,3,4
+)
+
+Select
+
+-- mode sessions
+
+dim_date.date,
+country.country_code,
+ifnull(country.name, 'Unknown') AS country,
+ifnull(country.territory_name, 'Unknown') AS territory,
+ifnull(country.region_name, 'Unknown') AS region,
+dim_platform.display_platform platform,
+daily_users.dau,
+mode_sessions.dau_creations,
+mode_sessions.dau_my_faction,
+mode_sessions.dau_my_rise,
+mode_sessions.dau_universe,
+mode_sessions.dau_online,
+mode_sessions.dau_my_gm,
+mode_sessions.dau_showcase,
+
+-- store_sessions
+
+mf_store_sessions.dau_market_visits,
+mf_store_sessions.market_visits,
+mf_store_sessions.dau_market_views,
+mf_store_sessions.market_views,
+mf_store_sessions.dau_market_purchase,
+mf_store_sessions.market_purchase,
+
+-- Pack Store
+mf_store_sessions.dau_pack_market_visits,
+mf_store_sessions.pack_market_visits,
+mf_store_sessions.dau_pack_market_views,
+mf_store_sessions.pack_market_views,
+mf_store_sessions.dau_pack_market_purchase,
+mf_store_sessions.pack_market_purchase,
+
+-- Token Store
+mf_store_sessions.dau_token_market_visits,
+mf_store_sessions.token_market_visits,
+mf_store_sessions.dau_token_market_views,
+mf_store_sessions.token_market_views,
+mf_store_sessions.dau_token_market_purchase,
+mf_store_sessions.token_market_purchase,
+
+-- Pack Market
+
+market_spend.pack_market_spenders,
+market_spend.pack_market_spend,
+
+-- Token Market
+
+market_spend.token_market_spenders,
+market_spend.token_market_spend,
+
+mf_store_sessions.converted_market_visits,
+mf_store_sessions.converted_token_market_visits,
+mf_store_sessions.converted_pack_market_visits,
+dim_platform.display_service service,
+
+-- Battles
+faction_wars_game_starts,
+faction_wars_game_wins,
+faction_wars_game_loses,
+faction_wars_game_end,
+faction_wars_players,
+-- Proving Grounds
+proving_grounds_game_starts,
+proving_grounds_game_wins,
+proving_grounds_game_loses,
+proving_grounds_game_end,
+proving_grounds_players,
+-- Weekly Towers
+weekly_towers_game_starts,
+weekly_towers_game_wins,
+weekly_towers_game_loses,
+weekly_towers_game_end,
+weekly_towers_players,
+-- MyRise
+my_rise_game_starts,
+my_rise_game_wins,
+my_rise_game_loses,
+my_rise_game_end,
+my_rise_players,
+-- Online
+online_game_starts,
+online_game_wins,
+online_game_loses,
+online_game_end,
+online_players,
+-- Online Sub Modes
+lobbies_players,
+quickplay_players,
+tonightsmatch_players,
+lobbies_game_starts,
+quickplay_game_starts,
+tonightsmatch_game_starts,
+vc_market_spend,
+mfp_market_spend,
+store_credit_dlc_unlock,
+store_credit_universe_match,
+store_credit_play_match,
+store_credit_online_match,
+store_credit_showcase_match,
+store_credit_my_rise_dlc_bonus,
+VC_PURCHASE,
+VC_SPEND,
+MFP_EARN,
+MFP_SPEND,
+TOKENS_EARN,
+TOKENS_SPEND,
+STORE_CREDIT_EARN,
+STORE_CREDIT_SPEND,
+mode_sessions.dau_play
+
+FROM PLATFORM_AND_SERVICE_MAPPING DIM_PLATFORM
+--TREATING THE NEXT TWO JOINS AS FULL JOINS TO BUILD ALL POSSIBLE DIMENSIONS
+INNER JOIN DATAANALYTICS.REFERENCE.DIM_COUNTRY country
+ON 1=1
+INNER JOIN DIM_DATE
+ON 1=1
+
+
+left join daily_users
+
+on country.country_code = daily_users.country_code
+and DIM_PLATFORM.display_platform = daily_users.platform
+and dim_date.date = daily_users.date
+and DIM_PLATFORM.display_service = daily_users.service
+
+left join mode_sessions
+
+on country.country_code = mode_sessions.country_code
+and DIM_PLATFORM.display_platform = mode_sessions.platform
+and dim_date.date = mode_sessions.date
+and DIM_PLATFORM.display_service = mode_sessions.service
+
+left join mf_store_sessions
+
+on mf_store_sessions.country_code = country.country_code
+and mf_store_sessions.platform = DIM_PLATFORM.display_platform
+and mf_store_sessions.date = dim_date.date
+and mf_store_sessions.service = DIM_PLATFORM.display_service
+
+left join market_spend
+
+on market_spend.country_code = country.country_code
+and market_spend.platform = DIM_PLATFORM.display_platform
+and market_spend.date = dim_date.date
+and market_spend.service = DIM_PLATFORM.display_service
+
+left join battles
+
+on battles.country_code = country.country_code
+and battles.platform = DIM_PLATFORM.display_platform
+and battles.date = dim_date.date
+and battles.service = DIM_PLATFORM.display_service

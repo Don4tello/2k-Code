@@ -1,0 +1,36 @@
+CREATE OR REPLACE VIEW DATAANALYTICS.BI.cwir_wwe2k22_weekly_vc_forecasts_and_actuals AS 
+Select * from 
+(Select 
+DIM_WEEK.WEEK_ENDING WEEK,
+'Forecast' vc_revenue_type,
+Sum(FORECAST)FORECAST
+from STRATEGIC.MODEL_OUTPUT.WWE_2K22_VC_REV_FORECAST fc
+
+           INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+            ON date >= DIM_WEEK.WEEK_STARTING
+                AND date <= DIM_WEEK.WEEK_ENDING
+
+where last_updated = (select max(last_updated) last_updated from STRATEGIC.MODEL_OUTPUT.WWE_2K22_VC_REV_FORECAST )
+
+--where date >= CURRENT_DATE() - 15
+
+group by 1,2
+order by 1 desc
+limit 1)
+UNION ALL
+Select * from 
+ ( SELECT
+      DIM_WEEK.WEEK_ENDING WEEK,
+      'Actuals' vc_revenue_type,
+      SUM(CASE WHEN PRODUCT_TYPE = 'Virtual Currency' THEN VIRTUAL_CURRENCY_REVENUE ELSE null END) AS VIRTUAL_CURRENCY_REVENUE
+ 
+  FROM "DATAANALYTICS"."BI"."WWE2K22_SALES_METRICS" SALES
+           INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+            ON SALES.DATE >= DIM_WEEK.WEEK_STARTING
+                AND SALES.DATE <= DIM_WEEK.WEEK_ENDING
+ 
+where SALES.title = 'WWE 2K22'
+ 
+  GROUP BY 1
+  order by 1 desc
+  limit 1 )

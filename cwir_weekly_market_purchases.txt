@@ -1,0 +1,198 @@
+CREATE OR REPLACE VIEW dataanalytics.bi.cwir_weekly_market_purchases as
+WITH item_detail as (
+// This should also be used to calculate purchases
+select
+date_trunc('DAY', collect_inserted_timestamp) date, 
+case 
+ when platform = 'PC_CLIENT' then 'Windows'
+ when platform = 'PS5' then 'PS5'
+ when platform = 'XSX' then 'XBSX'
+ when platform = 'XBOXONE' then 'XB1'
+ when platform = 'PS4' then 'PS4'
+ else 'New' || platform end platform,
+  case 
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+user_country,
+currency_type,
+item_value item_id,
+item_type,
+Currency_amount::integer Currency_amount,
+NAME_LOC_TEXT,
+iff(QTY is null and item_type = 'Pack', 1, QTY)::integer as pack_quantity, // if box then what size? otherwise put 1 in
+iff(item_type = 'Card',NAME_LOC_TEXT,null) card_rarity, // for tokens
+case
+ when pack_quantity >1 and item_type = 'Pack' then regexp_replace(NAME_LOC_TEXT, concat(' ',pack_quantity,'.*',''))
+ when NAME_LOC_TEXT like '%PACK%' and item_type = 'Pack' then regexp_replace(NAME_LOC_TEXT,' PACK','')
+ when NAME_LOC_TEXT like '%Token%' and item_type = 'Card' then null
+end as series, // name of pack series, lets us associate single and boxes of packs 
+case 
+ when currency_type = 'Tokens' then NOTES
+end as token_name,
+orv as ovr,
+count(distinct user_id) dau_market_purchase,
+count(distinct transaction_guid) market_purchase
+  
+from WWE2K22.EVENTS.GENERAL_TRANSACTION gt
+left join WWE2K22.REFERENCE.OFFER_TABLE r on r.ID = gt.item_value
+left join (select * from WWE2K22.REFERENCE.BUNDLE_TABLE where size >0) b on r.pack_id = b.ID
+left join (select distinct CARDID, orv,RARITY,NAME_LOC_TEXT card_name from "WWE2K22_DEV"."REFERENCE"."MF_CARDS" Card) mfc
+ on TRY_CAST(r.card_id as INTEGER) = TRY_CAST(mfc.CARDID as INTEGER)
+where currency_action = 'Spend'
+and game_mode = 'MyFaction'
+and currency_type in ('MFP','VC', 'Tokens')
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07' // get rid of some of the dev data -- 2022-03-07
+and date_trunc('DAY', collect_inserted_timestamp) < CURRENT_DATE()
+group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14
+),
+item_detail_all as (
+// This should also be used to calculate purchases
+select
+date_trunc('DAY', collect_inserted_timestamp) date, 
+case 
+ when platform = 'PC_CLIENT' then 'Windows'
+ when platform = 'PS5' then 'PS5'
+ when platform = 'XSX' then 'XBSX'
+ when platform = 'XBOXONE' then 'XB1'
+ when platform = 'PS4' then 'PS4'
+ else 'New' || platform end platform,
+  case 
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+user_country,
+'Overall' currency_type,
+item_value item_id,
+item_type,
+Currency_amount::integer Currency_amount,
+NAME_LOC_TEXT,
+iff(QTY is null and item_type = 'Pack', 1, QTY)::integer as pack_quantity, // if box then what size? otherwise put 1 in
+iff(item_type = 'Card',NAME_LOC_TEXT,null) card_rarity, // for tokens
+case
+ when pack_quantity >1 and item_type = 'Pack' then regexp_replace(NAME_LOC_TEXT, concat(' ',pack_quantity,'.*',''))
+ when NAME_LOC_TEXT like '%PACK%' and item_type = 'Pack' then regexp_replace(NAME_LOC_TEXT,' PACK','')
+ when NAME_LOC_TEXT like '%Token%' and item_type = 'Card' then null
+end as series, // name of pack series, lets us associate single and boxes of packs 
+case 
+ when currency_type = 'Tokens' then NOTES
+end as token_name,
+orv as ovr,
+count(distinct user_id) dau_market_purchase,
+count(distinct transaction_guid) market_purchase
+  
+from WWE2K22.EVENTS.GENERAL_TRANSACTION gt
+left join WWE2K22.REFERENCE.OFFER_TABLE r on r.ID = gt.item_value
+left join (select * from WWE2K22.REFERENCE.BUNDLE_TABLE where size >0) b on r.pack_id = b.ID
+left join (select distinct CARDID, orv,RARITY,NAME_LOC_TEXT card_name from "WWE2K22_DEV"."REFERENCE"."MF_CARDS" Card) mfc
+ on TRY_CAST(r.card_id as INTEGER) = TRY_CAST(mfc.CARDID as INTEGER)
+where currency_action = 'Spend'
+and game_mode = 'MyFaction'
+and currency_type in ('MFP','VC', 'Tokens')
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07' // get rid of some of the dev data -- 2022-03-07
+and date_trunc('DAY', collect_inserted_timestamp) < CURRENT_DATE()
+group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14
+)
+
+
+Select
+DIM_WEEK.WEEK_ENDING,
+user_country country_code,
+ifnull(country.name, 'Unknown') AS country,
+ifnull(country.territory_name, 'Unknown') AS territory,
+ifnull(country.region_name, 'Unknown') AS region,
+item_detail.item_id,
+case 
+ when item_detail.item_type = 'Pack' then NAME_LOC_TEXT 
+ when item_detail.item_type = 'Card' then token_name
+end item,
+item_detail.platform,
+service,
+currency_type,
+item_detail.item_id gained_item_id,
+item_detail.item_type gained_item_type,
+series as pack_series,
+pack_quantity, 
+card_rarity,
+ovr,
+sum(dau_market_purchase) dau_market_purchase,
+sum(market_purchase) market_purchase,
+sum(Currency_amount) Currency_amount,
+max(nr_of_days_available) nr_of_days_available
+
+from item_detail
+
+ LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = item_detail.user_country 
+ 
+ INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+ ON item_detail.DATE >= DIM_WEEK.WEEK_STARTING
+ AND item_detail.DATE <= DIM_WEEK.WEEK_ENDING
+ 
+  left join (Select DIM_WEEK.WEEK_ENDING, item_detail_all.item_id, count(distinct DATE) nr_of_days_available from item_detail_all 
+       INNER JOIN 
+            ( Select *
+             from
+             DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK
+order by week_number desc limit 1)
+ DIM_WEEK
+ ON item_detail_all.DATE >= DIM_WEEK.WEEK_STARTING
+ AND item_detail_all.DATE <= DIM_WEEK.WEEK_ENDING
+     group by 1,2
+     ) nr_of_days
+     on nr_of_days.week_ending = DIM_WEEK.week_ending and nr_of_days.item_id = item_detail.item_id       
+ 
+ group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16
+ 
+ UNION ALL
+
+Select
+DIM_WEEK.WEEK_ENDING,
+user_country country_code,
+ifnull(country.name, 'Unknown') AS country,
+ifnull(country.territory_name, 'Unknown') AS territory,
+ifnull(country.region_name, 'Unknown') AS region,
+item_detail_all.item_id,
+case 
+ when item_type = 'Pack' then NAME_LOC_TEXT 
+ when item_type = 'Card' then token_name
+end item,
+platform,
+service,
+currency_type,
+item_detail_all.item_id gained_item_id,
+item_type gained_item_type,
+series as pack_series,
+pack_quantity, 
+card_rarity,
+ovr,
+sum(dau_market_purchase) dau_market_purchase,
+sum(market_purchase) market_purchase,
+sum(Currency_amount) Currency_amount,
+max(nr_of_days_available) nr_of_days_available
+
+from item_detail_all
+
+ LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = item_detail_all.user_country 
+ 
+ INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+ ON item_detail_all.DATE >= DIM_WEEK.WEEK_STARTING
+ AND item_detail_all.DATE <= DIM_WEEK.WEEK_ENDING
+ 
+ left join (Select DIM_WEEK.WEEK_ENDING, item_detail_all.item_id, count(distinct DATE) nr_of_days_available from item_detail_all 
+       INNER JOIN 
+                        ( Select *
+             from
+             DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK
+order by week_number desc limit 1) DIM_WEEK
+ ON item_detail_all.DATE >= DIM_WEEK.WEEK_STARTING
+ AND item_detail_all.DATE <= DIM_WEEK.WEEK_ENDING
+     group by 1,2
+     ) nr_of_days
+     on nr_of_days.week_ending = DIM_WEEK.week_ending and nr_of_days.item_id = item_detail_all.item_id       
+    
+ 
+ group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16

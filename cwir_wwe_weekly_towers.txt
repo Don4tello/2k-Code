@@ -1,0 +1,178 @@
+CREATE OR REPLACE VIEW dataanalytics.bi.cwir_wwe_weekly_towers as 
+with
+tower_starts as (
+select
+user_id my_faction_user_id,
+case when sub_mode = ('MFWeeklyTowers')  then user_id else null end tower_user_id,
+MATCH_GUID,
+TOWER_DIFFICULTY,
+TOWER_ID,
+TOWER_NAME,
+TOWER_STATUS,
+TOWER_STEP,
+sub_mode,
+user_country country_code,
+case 
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case 
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+ifnull(country.name, 'Unknown') AS country,
+ifnull(country.territory_name, 'Unknown') AS territory,
+ifnull(country.region_name, 'Unknown') AS region
+from WWE2K22.EVENTS.MATCH_STATUS matches
+   LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = matches.user_country
+where
+TOWER_ID is not null
+and match_status ='Start'
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1
+and game_mode='MyFaction'
+
+group by 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+)
+, match_ends as (
+select
+MATCH_GUID,
+user_id,
+sub_mode,
+1 as complete,
+iff(win=0,1,0) as win,
+SECONDS_FLOAT as time
+from WWE2K22.EVENTS.MATCH_STATUS
+where match_status = 'End'
+and collect_inserted_timestamp>='2022-03-07'
+and collect_inserted_timestamp <= CURRENT_DATE()-1
+and game_mode='MyFaction'
+and sub_mode in ('MFWeeklyTowers')
+and win::string<>'SuperHeavy' // there is a weird error where a value for win is notreal!
+),
+tower_dates as (
+select
+min(date_trunc('DAY', collect_inserted_timestamp)) tower_date,
+TOWER_ID
+from WWE2K22.EVENTS.MATCH_STATUS
+where
+TOWER_ID is not null
+and match_status ='Start'
+and date_trunc('DAY', collect_inserted_timestamp)>='2022-03-07'
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1
+and game_mode='MyFaction'
+and sub_mode in ('MFWeeklyTowers', 'MFProvingGrounds')
+
+group by 2
+),
+time_spent_wau as (
+    Select
+DIM_WEEK.WEEK_ENDING,
+user_country country_code,
+ifnull(country.name, 'Unknown') AS country_name,
+ifnull(country.territory_name, 'Unknown') AS territory_name,
+ifnull(country.region_name, 'Unknown') AS region_name,
+case
+when platform = 'PC_CLIENT' then 'Windows'
+when platform = 'PS5' then 'PS5'
+when platform = 'XSX' then 'XBSX'
+when platform = 'XBOXONE' then 'XB1'
+when platform = 'PS4' then 'PS4'
+else 'New' || platform end platform,
+case
+when service = 'Steam' then 'Steam'
+when service = 'PSN' then 'SEN'
+when service = 'XBL' then 'Xbox Live'
+else 'New' || service end service,
+count(distinct iff(mode_status = 'ModeEnter', user_id, null)) my_faction_wau,
+CURRENT_DATE()-1 reporting_date
+from WWE2K22.EVENTS.MODE_STATUS MS
+         INNER JOIN DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK DIM_WEEK
+            ON MS.collect_inserted_timestamp >= DIM_WEEK.WEEK_STARTING
+                AND MS.collect_inserted_timestamp <= DIM_WEEK.WEEK_ENDING
+ LEFT JOIN dataanalytics.reference.dim_country country
+ ON country.country_code = ms.user_country        
+where sub_mode not in ('Inactive', 'Suspended') 
+and date_trunc('DAY', collect_inserted_timestamp)>=CURRENT_DATE()-15
+and date_trunc('DAY', collect_inserted_timestamp) <= CURRENT_DATE()-1
+and game_mode =  'MyFaction' -- done in a later stage using sub_modes from online
+group by 1,2,3,4,5,6,7
+),
+
+stg_1 as (
+select
+case
+when s.sub_mode = 'MFWeeklyTowers' then LOCALIZATION_TEXT
+when s.sub_mode = 'MFProvingGrounds' then pgt.TOWER_NAME
+end as tower_name,
+country_code,
+platform,
+service,
+country,
+territory,
+region,
+WEEK_ENDING,
+count(distinct s.MATCH_GUID) as attempts,
+sum(zeroifnull(e.complete)) as completions,
+sum(iff( is_real(e.win) and e.win>0,1,0)) as wins,
+count(distinct e.user_id) as wau
+from tower_starts s
+left join match_ends e
+on s.MATCH_GUID = e.MATCH_GUID 
+  and s.tower_user_id = e.user_id
+  and s.sub_mode = e.sub_mode
+left join tower_dates
+on s.tower_id = tower_dates.tower_id
+
+inner join (Select 
+localization_text,
+id, 
+date(Left(release_date,10), 'DD/MM/YYYY') release_date_fixed
+from WWE2K22.REFERENCE.CSV_TOWERS
+where type = 'WeeklyTower' 
+and date(Left(release_date,10), 'DD/MM/YYYY') <= CURRENT_DATE()-1
+order by id desc
+           limit 2
+          )
+twr_m on s.tower_id = twr_m.ID
+left join sandbox.colin.wwe2k22_proving_grounds_tower pgt on s.tower_id = pgt.tower_id
+
+INNER JOIN (
+Select * 
+    from 
+    DATAANALYTICS.BI.WWE2K22_CWIR_DIM_WEEK
+    order by week_number desc
+    limit 2
+) DIM_WEEK
+ON tower_date >= DIM_WEEK.WEEK_STARTING
+AND tower_date <= DIM_WEEK.WEEK_ENDING
+
+group by 1,2,3,4,5,6,7,8 )
+
+Select
+ts.tower_name,
+ts.country_code,
+ts.platform,
+ts.service,
+ts.country,
+territory,
+region,
+ts.WEEK_ENDING,
+attempts,
+completions,
+wins,
+wau,
+my_faction_wau
+from stg_1 ts
+
+left join time_spent_wau on 
+             ts.PLATFORM = time_spent_wau.PLATFORM 
+            AND ts.SERVICE = time_spent_wau.SERVICE
+            AND ts.COUNTRY_CODE = time_spent_wau.COUNTRY_CODE    
+            AND ts.WEEK_ENDING = time_spent_wau.WEEK_ENDING
+
